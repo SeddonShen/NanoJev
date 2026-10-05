@@ -80,6 +80,20 @@
 - 备选：RLCD events 三臂 + 初始评测恰好 4 个任务，但缺官方初始 checkpoint
   （v3_teacher_coords_multi_seed17，HF 未见；用 unified checkpoint 替代需记录偏差）。
 
+## 过夜运行（2026-10-06 夜 → 07 日晨）
+
+- 4×4800 步扩展训练进行中：runs/unified_repro/{arm}_s4800（GPU 0/3/5/7，同 seed=17，
+  前 600 步批次与 600 步版完全一致可叠加验证；最优 checkpoint 覆盖写，每臂固定 2.3G）。
+  预计 ~8.5–9 小时跑完。进程已脱离会话（PPID=1），关机/断线不影响。
+- 600 步 4-arm 复现已完成并通过对账：test CE 四臂与官方差 <0.008
+  （hard 0.678/0.677 · hard_lr2e5 0.675/0.671 · soft 0.673/0.674 · soft2 0.681/0.689）。
+- 查看进度：http://175.102.130.90:8799 （面板含 8 个 run）或
+  `venv/bin/python launch_reproduction.py --status`。
+- 明早待办：① 汇总 4800 步结果并与 600 步轨迹叠加验证；② 用我们的 checkpoint 跑
+  Maze/Snake 游戏成功率回放（evaluate_game_policy.py 方向）；③ 修 ViZDoom 容器段错误
+  （补系统依赖）后跑 Basic/PP 回放；④ 用户待定：seed 18/19 复跑（8 卡方案 A/B）。
+- 官方游戏成功率参考（274 测试局）：Maze 4/10 · Snake 8/8 · Basic 128/128 · PP 27/128。
+
 ## 下一阶段（进行中）
 
 - 自造决策数据：先走 RLCD 冷启动小闭环，不依赖外部 API/Jev。
