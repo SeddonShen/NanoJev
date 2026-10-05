@@ -90,6 +90,9 @@ class RunWatcher:
                 by_task = dev.get("by_task_role") or {}
                 point["by_task"] = {k: round(v.get("ce"), 4) for k, v in by_task.items()
                                     if isinstance(v.get("ce"), (int, float))}
+                by_pool = dev.get("by_selection_pool") or {}
+                point["by_pool"] = {k: round(v.get("ce"), 4) for k, v in by_pool.items()
+                                    if isinstance(v.get("ce"), (int, float))}
                 dev_points.append(point)
         best = min(dev_points, key=lambda p: p["selection_ce"]) if dev_points else None
         elapsed = last.get("elapsed_seconds") if last else None

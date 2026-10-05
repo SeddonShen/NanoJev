@@ -179,11 +179,11 @@ function runCard(run) {
       const isBest = run.best && p.step === run.best.step;
       row.appendChild(el("td", null, String(p.step)));
       row.appendChild(el("td", isBest ? "best" : null, fmt(p.selection_ce, 4)));
-      const bt = p.by_task || {};
-      row.appendChild(el("td", null, fmt(bt["maze/policy"],3)));
-      row.appendChild(el("td", null, fmt(bt["snake/policy"],3)));
-      row.appendChild(el("td", null, fmt(bt["shooting/policy/basic"],3)));
-      row.appendChild(el("td", null, fmt(bt["shooting/policy/predict_position"],3)));
+      const pool = p.by_pool || p.by_task || {};
+      row.appendChild(el("td", null, fmt(pool["maze/policy"],3)));
+      row.appendChild(el("td", null, fmt(pool["snake/policy"],3)));
+      row.appendChild(el("td", null, fmt(pool["shooting/policy/basic"],3)));
+      row.appendChild(el("td", null, fmt(pool["shooting/policy/predict_position"],3)));
       tbl.appendChild(row);
     }
     card.appendChild(el("div","sub","dev 评测（最近 6 次，绿色为最优步）:"));
