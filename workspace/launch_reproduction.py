@@ -37,8 +37,8 @@ ARMS = {
 }
 
 
-def build_command(name, spec):
-    out = OUT_ROOT / name
+def build_command(name, spec, steps=600, suffix=""):
+    out = OUT_ROOT / (name + suffix)
     cmd = [
         str(PY), str(TRAINER),
         "--input", str(DATA / "unified" / spec["variant"]),
@@ -46,7 +46,7 @@ def build_command(name, spec):
         "--output-dir", str(out),
         "--stage", "sft", "--loss", "ce", "--balance", "task",
         "--policy-pool-weights", str(DATA / "configs/sonic_policy_pool_weights.json"),
-        "--steps", "600", "--head-steps", "0", "--seed", "17",
+        "--steps", str(steps), "--head-steps", "0", "--seed", "17",
         "--batch-questions", "24", "--microbatch-questions", "8",
         "--max-microbatch-tokens", "32768", "--max-length", "8192",
         "--eval-every", "100", "--backbone-lr", spec["backbone_lr"],
@@ -104,16 +104,16 @@ def cmd_stop(names):
             print(f"{name}: not running")
 
 
-def cmd_launch(names, dry_run=False):
+def cmd_launch(names, dry_run=False, steps=600, suffix=""):
     reg = load_registry()
     (OUT_ROOT / "logs").mkdir(parents=True, exist_ok=True)
     for name in names:
         spec = ARMS[name]
-        cmd, out = build_command(name, spec)
+        cmd, out = build_command(name, spec, steps, suffix)
         if out.exists() and any(out.iterdir()):
             print(f"{name}: output dir not empty, skip: {out}")
             continue
-        log_path = OUT_ROOT / "logs" / f"{name}.log"
+        log_path = OUT_ROOT / "logs" / f"{name}{suffix}.log"
         if dry_run:
             print(f"[dry-run] gpu={spec['gpu']} out={out}")
             print("  " + " ".join(cmd))
@@ -122,13 +122,13 @@ def cmd_launch(names, dry_run=False):
         with log_path.open("ab") as log_fh:
             proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
                                     env=env, cwd=str(ROOT), start_new_session=True)
-        reg["runs"][name] = {
-            "name": name, "dir": str(out), "gpu": spec["gpu"],
+        reg["runs"][name + suffix] = {
+            "name": name + suffix, "dir": str(out), "gpu": spec["gpu"],
             "cuda_visible_devices": str(spec["gpu"]), "pid": proc.pid,
             "log": str(log_path), "cmd": cmd,
             "launched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        print(f"{name}: launched pid={proc.pid} gpu={spec['gpu']} log={log_path}")
+        print(f"{name + suffix}: launched pid={proc.pid} gpu={spec['gpu']} log={log_path}")
         time.sleep(2)  # stagger startup; dataset validation is CPU-heavy
     if not dry_run:
         save_registry(reg)
@@ -141,13 +141,15 @@ def main():
     ap.add_argument("--arms", nargs="+", choices=sorted(ARMS), help="subset of arms to launch")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--stop", nargs="*", help="stop all, or list arm names")
+    ap.add_argument("--steps", type=int, default=600, help="training steps per arm")
+    ap.add_argument("--suffix", default="", help="output dir / registry name suffix, e.g. _s4800")
     args = ap.parse_args()
     if args.status:
         cmd_status()
     elif args.stop is not None:
         cmd_stop(args.stop or None)
     else:
-        cmd_launch(args.arms or list(ARMS), args.dry_run)
+        cmd_launch(args.arms or list(ARMS), args.dry_run, args.steps, args.suffix)
 
 
 if __name__ == "__main__":
