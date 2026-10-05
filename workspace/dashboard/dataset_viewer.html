@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>NanoJev 数据集浏览器 — 四个任务的游戏画面</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:#0e1116; color:#d7dde6; padding:16px; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:#7b8695; font-size:12px; margin-bottom:12px; }
+  .tabs { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .tab { padding:6px 14px; border:1px solid #232a35; border-radius:8px; background:#131820; cursor:pointer; }
+  .tab.on { border-color:#2f6fed; background:#182234; }
+  .layout { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .stage { border:1px solid #232a35; border-radius:10px; background:#131820; padding:12px; }
+  canvas { display:block; border-radius:6px; }
+  .ctrl { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  button { background:#1d2735; color:#d7dde6; border:1px solid #2a3340; border-radius:7px;
+           padding:5px 12px; cursor:pointer; font-size:13px; }
+  button:hover { background:#26334a; }
+  input[type=range] { width:180px; }
+  select { background:#1d2735; color:#d7dde6; border:1px solid #2a3340; border-radius:7px; padding:5px 8px; }
+  .side { flex:1; min-width:330px; max-width:560px; }
+  .panel { border:1px solid #232a35; border-radius:10px; background:#131820; padding:12px 14px; margin-bottom:12px; }
+  .panel h2 { font-size:13px; margin:0 0 8px; color:#aeb9c8; }
+  .choice { border:1px solid #232a35; border-radius:8px; padding:7px 10px; margin-bottom:7px; }
+  .choice.exec { border-color:#2ea86e; }
+  .choice .row { display:flex; justify-content:space-between; gap:10px; }
+  .choice .id { font-weight:700; }
+  .choice .p { color:#8b96a5; font-size:12px; }
+  .bar { height:6px; background:#1d232d; border-radius:3px; margin-top:5px; overflow:hidden; }
+  .bar > div { height:100%; background:#4f8ef7; border-radius:3px; }
+  .meta { font-size:12px; color:#97a3b4; margin-top:4px; }
+  details { margin-top:6px; } summary { cursor:pointer; color:#8b96a5; font-size:12px; }
+  pre { font:11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#9aa6b6; white-space:pre-wrap;
+        max-height:260px; overflow:auto; background:#0d1117; padding:8px; border-radius:6px; }
+  .legend { font-size:12px; color:#8b96a5; margin-top:8px; }
+</style>
+</head>
+<body>
+<h1>NanoJev 数据集浏览器 — 把训练数据的文字状态画成游戏画面</h1>
+<div class="sub">dev 集（hard 目标版）· 每步 = 一条训练记录 · 绿框 = 该步实际执行的动作 · 蓝条 = 训练目标分布</div>
+<div class="tabs" id="tabs"></div>
+<div class="layout">
+  <div class="stage">
+    <div><canvas id="cv" width="480" height="480"></canvas></div>
+    <div class="ctrl">
+      <select id="episode"></select>
+      <button id="prev">◀ 上一步</button>
+      <button id="play">▶ 自动播放</button>
+      <button id="next">下一步 ▶</button>
+      <input type="range" id="slider" min="0" max="0" value="0">
+      <span id="pos" class="meta"></span>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="side">
+    <div class="panel"><h2>本步的问题与目标</h2><div id="choices"></div><div class="meta" id="target_kind"></div></div>
+    <div class="panel"><h2>原始 state 文本（模型读到的）</h2>
+      <details open><summary>展开/收起</summary><pre id="raw"></pre></details></div>
+  </div>
+</div>
+<script>
+"use strict";
+let DATA=null, task=null, ep=0, step=0, timer=null;
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+
+async function boot(){
+  DATA = await (await fetch("/data/episodes.json")).json();
+  const tabs=document.getElementById("tabs");
+  const names={maze:"迷宫 Maze", snake:"贪吃蛇 Snake", shooting_basic:"射击·Basic 瞄准", shooting_predict_position:"射击·Predict Position 预判"};
+  Object.keys(DATA).forEach((t,i)=>{
+    const b=document.createElement("div"); b.className="tab"+(i===0?" on":""); b.textContent=`${names[t]||t} (${DATA[t].length}局)`;
+    b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on")); b.classList.add("on"); task=t; ep=0; step=0; loadEpisode();};
+    tabs.appendChild(b);
+  });
+  task=Object.keys(DATA)[0];
+  document.getElementById("episode").onchange=e=>{ep=+e.target.value; step=0; loadEpisode();};
+  document.getElementById("prev").onclick=()=>{if(step>0){step--;draw();}};
+  document.getElementById("next").onclick=()=>{if(step<curSteps().length-1){step++;draw();}};
+  document.getElementById("slider").oninput=e=>{step=+e.target.value;draw();};
+  document.getElementById("play").onclick=togglePlay;
+  loadEpisode();
+}
+const curSteps=()=>DATA[task][ep].steps;
+
+function loadEpisode(){
+  const sel=document.getElementById("episode");
+  sel.innerHTML="";
+  DATA[task].forEach((e,i)=>{
+    const o=document.createElement("option"); o.value=i;
+    o.textContent=`第${i+1}局 · ${e.n_steps}步 · ${e.success===null?"":e.success?"成功 ✓":"失败 ✗"}`;
+    sel.appendChild(o);
+  });
+  sel.value=ep;
+  const sl=document.getElementById("slider");
+  sl.max=curSteps().length-1; sl.value=0;
+  stopPlay(); step=0; draw();
+}
+
+function togglePlay(){
+  if(timer){stopPlay();return;}
+  timer=setInterval(()=>{ if(step<curSteps().length-1){step++;draw();} else stopPlay(); }, 900);
+  document.getElementById("play").textContent="⏸ 暂停";
+}
+function stopPlay(){ if(timer){clearInterval(timer);timer=null;} document.getElementById("play").textContent="▶ 自动播放"; }
+
+function draw(){
+  const s=curSteps()[step];
+  document.getElementById("slider").value=step;
+  document.getElementById("pos").textContent=`第 ${step+1}/${curSteps().length} 步 (decision ${s.i})`;
+  ctx.fillStyle="#0d1117"; ctx.fillRect(0,0,cv.width,cv.height);
+  if(task==="maze") drawMaze(s); else if(task==="snake") drawSnake(s); else drawShooting(s);
+  drawChoices(s);
+  document.getElementById("raw").textContent=s.raw_state;
+}
+
+function grid(rows,cols,cell){
+  cv.width=cols*cell; cv.height=rows*cell;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    ctx.fillStyle="#39414e"; ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
+  }
+}
+function drawMaze(s){
+  const {rows,cols,goal,agent,local_map,used}=s.render;
+  const cell=Math.min(52, Math.floor(500/Math.max(rows,cols)));
+  grid(rows,cols,cell);
+  if(agent&&local_map.length===5){
+    for(let i=0;i<5;i++)for(let j=0;j<5;j++){
+      const ch=local_map[i][j], r=agent[0]-2+i, c=agent[1]-2+j;
+      if(r<0||c<0||r>=rows||c>=cols||ch==="X") continue;
+      ctx.fillStyle= ch==="#" ? "#161b22" : "#2b3442";
+      ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
+    }
+  }
+  if(goal){ ctx.fillStyle="#f7d94f"; ctx.font=`bold ${cell*0.55}px sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("★", goal[1]*cell+cell/2-2, goal[0]*cell+cell/2+2); }
+  if(agent){ ctx.fillStyle="#4f8ef7"; ctx.beginPath();
+    ctx.arc(agent[1]*cell+cell/2, agent[0]*cell+cell/2, cell*0.3, 0, 7); ctx.fill(); }
+  document.getElementById("legend").innerHTML=
+    `● 智能体 · ★ 目标 [${goal}] · 深格=墙 · 浅格=已确认通路 · 灰格=未探测 · 已用步数 ${used??"?"}`;
+}
+function drawSnake(s){
+  const {rows,cols,body,food,direction,collected,remaining}=s.render;
+  const cell=Math.min(56, Math.floor(500/Math.max(rows,cols)));
+  grid(rows,cols,cell);
+  body.forEach((seg,i)=>{
+    ctx.fillStyle=i===0?"#4ff7a0":`rgb(${40+Math.max(0,90-i*8)},${150-i*6},${90})`;
+    ctx.fillRect(seg[1]*cell+3, seg[0]*cell+3, cell-7, cell-7);
+  });
+  if(food){ ctx.fillStyle="#f76f6f"; ctx.beginPath();
+    ctx.arc(food[1]*cell+cell/2, food[0]*cell+cell/2, cell*0.22, 0, 7); ctx.fill(); }
+  document.getElementById("legend").innerHTML=
+    `绿块=蛇（亮=头，方向 ${direction}）· 红点=食物 · 已吃 ${collected} · 剩余决策步 ${remaining??"?"}`;
+}
+function drawShooting(s){
+  const [W,H]=s.render.screen, scale=1.5;
+  cv.width=W*scale; cv.height=H*scale; ctx.scale(scale,scale);
+  ctx.fillStyle="#14181f"; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle="#232a35";
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  const f=s.render.frames[s.render.frames.length-1];
+  (f?.labels||[]).forEach(l=>{
+    const [x,y,w,h]=l.bbox, isPlayer=l.name==="DoomPlayer";
+    ctx.strokeStyle=isPlayer?"#4f8ef7":"#f7944f"; ctx.lineWidth=2;
+    ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle=isPlayer?"#4f8ef7":"#f7944f"; ctx.font="10px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(l.name, x, y-3);
+  });
+  ctx.setTransform(1,0,0,1,0,0);
+  if(f){
+    ctx.fillStyle="#97a3b4"; ctx.font="13px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(`HP ${f.health}  弹药 ${f.ammo}  tick ${f.tick}  剩余决策 ${s.render.remaining_decisions}  (观测帧共${s.render.history_len})`, 10, cv.height-8);
+  }
+  document.getElementById("legend").innerHTML=
+    `橙框=怪物（Cacodemon）· 蓝框=玩家自己 · 这是模型看到的"画面"——不是像素，是目标框坐标`;
+}
+function drawChoices(s){
+  const box=document.getElementById("choices"); box.innerHTML="";
+  const t=s.target||{};
+  const probs=t.probs||null, goldId=t.gold||null;
+  s.choices.forEach(c=>{
+    const d=document.createElement("div");
+    d.className="choice"+(c.id===s.executed?" exec":"");
+    const p=probs?probs[c.id]:null;
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<span class="id">${c.id}${c.id===s.executed?" ✓执行":""}${c.id===goldId?" ★专家答案":""}</span>
+      <span class="p">${p!=null?("目标概率 "+(p*100).toFixed(0)+"%"):""}</span>`;
+    const txt=document.createElement("div"); txt.className="meta"; txt.textContent=c.text;
+    d.appendChild(row); d.appendChild(txt);
+    if(p!=null){ const b=document.createElement("div"); b.className="bar";
+      const inner=document.createElement("div"); inner.style.width=(p*100)+"%"; b.appendChild(inner); d.appendChild(b); }
+    box.appendChild(d);
+  });
+  document.getElementById("target_kind").textContent =
+    t.kind==="jev_probs" ? "训练目标：Jev API 的概率分布（模仿 Jev 的判断）" :
+    t.kind==="expert_gold" ? "训练目标：专家实际执行的动作（hard 独热）" :
+    t.kind==="soft_probs" ? "训练目标：专家软化分布（soft 版）" : "（本步无目标）";
+}
+boot();
+</script>
+</body>
+</html>
