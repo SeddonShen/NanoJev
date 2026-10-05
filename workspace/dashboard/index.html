@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>NanoJev 训练实时面板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #0e1116; color: #d7dde6; padding: 18px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #7b8695; font-size: 12px; margin-bottom: 14px; }
+  .gpu-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .gpu-chip { border: 1px solid #232a35; border-radius: 8px; padding: 6px 10px; font-size: 12px;
+              background: #131820; min-width: 92px; }
+  .gpu-chip.ours { border-color: #2f6fed; }
+  .gpu-chip .idx { font-weight: 600; }
+  .gpu-chip.busy { color: #f7b64f; }
+  .panel { border: 1px solid #232a35; border-radius: 10px; background: #131820;
+           padding: 12px 14px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; color: #aeb9c8; font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px; }
+  .card { border: 1px solid #232a35; border-radius: 10px; background: #131820; padding: 12px 14px; }
+  .card.done { border-color: #2ea86e; }
+  .card.dead { border-color: #a33; }
+  .card-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .card-head .name { font-size: 15px; font-weight: 700; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .dot.on { background: #35c46f; } .dot.off { background: #555; } .dot.fin { background: #2ea86e; }
+  .tag { font-size: 11px; border: 1px solid #2a3340; border-radius: 5px; padding: 1px 7px; color: #8b96a5; }
+  .bar { height: 8px; border-radius: 4px; background: #1d232d; overflow: hidden; margin: 6px 0 4px; }
+  .bar > div { height: 100%; background: linear-gradient(90deg, #2f6fed, #4f8ef7); }
+  .stats { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: #97a3b4; margin: 6px 0; }
+  .stats b { color: #d7dde6; font-weight: 600; }
+  .chart { width: 100%; }
+  .log { font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace; color: #7d8898; white-space: pre-wrap;
+         max-height: 110px; overflow: auto; border-top: 1px dashed #232a35; margin-top: 8px; padding-top: 6px; }
+  table.devtbl { border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  table.devtbl td, table.devtbl th { border: 1px solid #232a35; padding: 2px 8px; text-align: right; }
+  table.devtbl th { color: #8b96a5; font-weight: 600; }
+  .best { color: #4ff7a0; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>NanoJev unified-games 复现训练 · 实时面板</h1>
+<div class="sub">每 3 秒自动刷新 · dev CE 越低越好 · 选择规则：固定池加权的 dev CE 最小步</div>
+<div id="gpus" class="gpu-strip"></div>
+
+<div class="panel">
+  <h2>Dev selection CE — 四个训练臂对比（含 step 0 初始值）</h2>
+  <div id="dev-chart" class="chart"></div>
+</div>
+
+<div id="cards" class="cards"></div>
+
+<script>
+"use strict";
+const REFRESH_MS = 3000;
+const fmt = (x, d=3) => x === null || x === undefined || isNaN(x) ? "—" : Number(x).toFixed(d);
+const fmtDur = s => { if (s==null||isNaN(s)) return "—";
+  s=Math.round(s); const h=~~(s/3600), m=~~(s%3600/60), sec=s%60;
+  return h?`${h}h${String(m).padStart(2,"0")}m`:m?`${m}m${String(sec).padStart(2,"0")}s`:`${sec}s`; };
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/* Dependency-free multi-series line chart into a div. series=[{name,color,points,dash}] */
+function lineChart(container, series, opts={}) {
+  container.innerHTML = "";
+  const W = Math.max(container.clientWidth || 640, 320), H = opts.height || 210;
+  const pad = {l: 52, r: 14, t: 12, b: 26};
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("width", "100%"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pts = series.flatMap(s => s.points);
+  if (!pts.length) { container.appendChild(el("div","sub","暂无数据")); return; }
+  let xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+  let xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
+  if (xmin === xmax) xmax += 1;
+  if (ymin === ymax) { ymin -= .5; ymax += .5; } else { const m = (ymax-ymin)*.08; ymin -= m; ymax += m; }
+  if (opts.yMin !== undefined) ymin = Math.min(ymin, opts.yMin);
+  const X = x => pad.l + (x-xmin)/(xmax-xmin)*(W-pad.l-pad.r);
+  const Y = y => H-pad.b - (y-ymin)/(ymax-ymin)*(H-pad.t-pad.b);
+  const mk = (tag, attrs) => { const n=document.createElementNS(svgNS,tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+  for (let g=0; g<=4; g++) {
+    const y = ymin + (ymax-ymin)*g/4;
+    svg.appendChild(mk("line",{x1:pad.l,x2:W-pad.r,y1:Y(y),y2:Y(y),stroke:"#1d232d","stroke-width":1}));
+    const t = mk("text",{x:pad.l-6,y:Y(y)+4,"text-anchor":"end",fill:"#66707e","font-size":10});
+    t.textContent = opts.yFmt ? opts.yFmt(y) : y.toPrecision(4);
+    svg.appendChild(t);
+  }
+  for (let g=0; g<=4; g++) {
+    const x = xmin + (xmax-xmin)*g/4;
+    const t = mk("text",{x:X(x),y:H-8,"text-anchor":"middle",fill:"#66707e","font-size":10});
+    t.textContent = Math.round(x); svg.appendChild(t);
+  }
+  const tX = mk("text",{x:(pad.l+W-pad.r)/2,y:H-1,"text-anchor":"middle",fill:"#4a5563","font-size":10});
+  tX.textContent = opts.xLabel || "step"; svg.appendChild(tX);
+  for (const s of series) {
+    if (!s.points.length) continue;
+    svg.appendChild(mk("polyline",{fill:"none",stroke:s.color,"stroke-width":1.8,
+      "stroke-dasharray": s.dash || "none",
+      points: s.points.map(p=>`${X(p[0])},${Y(p[1])}`).join(" ")}));
+    const last = s.points[s.points.length-1];
+    svg.appendChild(mk("circle",{cx:X(last[0]),cy:Y(last[1]),r:3,fill:s.color}));
+  }
+  const legend = el("div");
+  for (const s of series) {
+    const item = el("span", null, "");
+    item.style.marginRight = "14px"; item.style.fontSize = "12px";
+    const sw = el("span"); sw.style.display="inline-block"; sw.style.width="16px";
+    sw.style.height="3px"; sw.style.background=s.color;
+    sw.style.marginRight="5px"; sw.style.verticalAlign="middle";
+    if (s.dash) sw.style.background = `repeating-linear-gradient(90deg,${s.color} 0 4px,transparent 4px 7px)`;
+    item.appendChild(sw); item.appendChild(document.createTextNode(s.name));
+    legend.appendChild(item);
+  }
+  container.appendChild(svg); container.appendChild(legend);
+}
+
+function renderGpus(gpus) {
+  const strip = document.getElementById("gpus");
+  strip.innerHTML = "";
+  for (const g of gpus) {
+    const chip = el("div", "gpu-chip" + (g.ours ? " ours" : "") + (g.util > 5 ? " busy" : ""));
+    chip.appendChild(el("div", "idx", `GPU ${g.index}${g.ours ? " ★" : ""}`));
+    chip.appendChild(el("div", null, `${g.util}% · ${(g.mem_used/1024).toFixed(1)}/${(g.mem_total/1024).toFixed(0)}G`));
+    strip.appendChild(chip);
+  }
+}
+
+function runCard(run) {
+  const card = el("div", "card" + (run.finished ? " done" : (!run.alive ? " dead" : "")));
+  const head = el("div", "card-head");
+  const dot = el("span", "dot " + (run.finished ? "fin" : run.alive ? "on" : "off"));
+  const nameSpan = el("span", "name"); nameSpan.appendChild(dot);
+  nameSpan.appendChild(document.createTextNode(run.name));
+  head.appendChild(nameSpan);
+  head.appendChild(el("span", "tag", `GPU ${run.gpu ?? "?"}`));
+  if (run.variant !== "?") head.appendChild(el("span", "tag", run.variant));
+  if (run.backbone_lr) head.appendChild(el("span", "tag", `bb ${run.backbone_lr} / head ${run.head_lr}`));
+  head.appendChild(el("span", "tag", run.finished ? "完成" : run.alive ? "运行中" : `pid ${run.pid ?? "?"} 已退出`));
+  card.appendChild(head);
+
+  const pct = run.total_steps ? Math.min(100, 100*run.step/run.total_steps) : 0;
+  const bar = el("div", "bar"); const fill = el("div");
+  fill.style.width = pct.toFixed(1) + "%"; bar.appendChild(fill); card.appendChild(bar);
+  card.appendChild(el("div", "sub", `step ${run.step}/${run.total_steps || "?"} · ${pct.toFixed(1)}%` +
+    (run.eta_s != null ? ` · ETA ${fmtDur(run.eta_s)}` : "") +
+    (run.sec_per_step != null ? ` · ${fmt(run.sec_per_step,2)} s/步` : "")));
+
+  const stats = el("div", "stats");
+  const add = (k, v) => { const s = el("span"); s.appendChild(el("b", null, v)); s.appendChild(document.createTextNode(" " + k)); stats.appendChild(s); };
+  add("loss", fmt(run.loss, 4));
+  add("grad‖", fmt(run.grad_norm, 2));
+  add("elapsed", fmtDur(run.elapsed_s));
+  if (run.best) add(`best dev CE @${run.best.step}`, fmt(run.best.selection_ce, 4));
+  card.appendChild(stats);
+
+  const chart = el("div", "chart");
+  card.appendChild(chart);
+  setTimeout(() => lineChart(chart, [{name:"train loss", color:run.color,
+    points: run.loss_series.filter(p=>p[1]<run.loss_series.reduce((m,q)=>Math.min(m,q[1]),1e9)*3)}],
+    {height:140, xLabel:"step"}), 0);
+
+  if (run.dev_points.length) {
+    const tbl = el("table", "devtbl");
+    const tr = el("tr");
+    for (const h of ["step","dev CE","maze","snake","basic","PP"]) tr.appendChild(el("th", null, h));
+    tbl.appendChild(tr);
+    for (const p of run.dev_points.slice(-6).reverse()) {
+      const row = el("tr");
+      const isBest = run.best && p.step === run.best.step;
+      row.appendChild(el("td", null, String(p.step)));
+      row.appendChild(el("td", isBest ? "best" : null, fmt(p.selection_ce, 4)));
+      const bt = p.by_task || {};
+      row.appendChild(el("td", null, fmt(bt["maze/policy"],3)));
+      row.appendChild(el("td", null, fmt(bt["snake/policy"],3)));
+      row.appendChild(el("td", null, fmt(bt["shooting/policy/basic"],3)));
+      row.appendChild(el("td", null, fmt(bt["shooting/policy/predict_position"],3)));
+      tbl.appendChild(row);
+    }
+    card.appendChild(el("div","sub","dev 评测（最近 6 次，绿色为最优步）:"));
+    card.appendChild(tbl);
+  }
+  if (run.finished && run.summary) {
+    card.appendChild(el("div", "stats",
+      `最终选择: step ${run.summary.best_step} · dev CE ${fmt(run.summary.best_dev_selection_ce,4)} · 训练用时 ${fmtDur(run.summary.training_seconds)}`));
+  }
+  const log = el("div", "log", run.log_tail ? run.log_tail.split("\n").slice(-8).join("\n") : "");
+  card.appendChild(log);
+  return card;
+}
+
+function render(data) {
+  document.querySelector(".sub").textContent =
+    `服务器时间 ${data.server_time} · 每 3 秒自动刷新 · dev CE 越低越好`;
+  renderGpus(data.gpus || []);
+  lineChart(document.getElementById("dev-chart"),
+    data.runs.map(r => ({name: r.name, color: r.color, points: r.dev_points.map(p=>[p.step,p.selection_ce])})),
+    {height: 240, xLabel: "step"});
+  const cards = document.getElementById("cards");
+  cards.innerHTML = "";
+  for (const run of data.runs) cards.appendChild(runCard(run));
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/api/state", {cache: "no-store"});
+    render(await res.json());
+  } catch (e) {
+    document.querySelector(".sub").textContent = "连接失败，重试中… " + e;
+  }
+}
+poll();
+setInterval(poll, REFRESH_MS);
+</script>
+</body>
+</html>
