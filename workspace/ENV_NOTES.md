@@ -25,6 +25,17 @@
 - 复现产物：`runs/unified_repro/{hard_lr1e5,hard_lr2e5,soft_lr1e5,soft_lr2e5}/`，stdout 在 `runs/unified_repro/logs/`
 - 冒烟训练产物：`runs/smoke_hard_lr1e5/`
 
+## 对外访问约定（2026-10-06 起）
+
+- 给用户的链接一律用 **http://175.102.130.90:端口/**（服务都绑 0.0.0.0），不要给 127.0.0.1。
+- 端口分配：**8799** 训练实时面板 · **8800** 数据集浏览器（自建）· **8080** 官方 web 演示（仓库 web/，
+  已加中英切换：共享 `web/i18n-zh.js` + 各页一行 `<script>`，默认中文，右上角按钮切换，
+  MutationObserver 覆盖 JS 动态渲染；PRE/CODE/JSON 面板不翻译）。
+- 启动命令：
+  `nohup venv/bin/python dashboard/live_dashboard.py --port 8799 > runs/unified_repro/logs/dashboard.log 2>&1 &`
+  `nohup venv/bin/python dashboard/dataset_viewer.py --port 8800 > runs/unified_repro/logs/dataset_viewer.log 2>&1 &`
+  `nohup venv/bin/python -m http.server 8080 --bind 0.0.0.0 --directory NanoJev/web > runs/unified_repro/logs/web_demos.log 2>&1 &`
+
 ## GPU 占用（2026-10-06 核实）
 
 - **0/3/5/7 空闲归我们**；**1/2/4/6 是同事 chenyan+ 的 vLLM 服务**（TP=4，已跑 12 天，各占 22.9GB，
