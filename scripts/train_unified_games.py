@@ -631,6 +631,8 @@ def parse_args(argv=None):
     parser.add_argument("--max-microbatch-tokens", type=int, default=16384)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--eval-every", type=int, default=50)
+    parser.add_argument("--log-every", type=int, default=12,
+                        help="Logging-only cadence for train_log.json dumps and stdout prints; does not affect training")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--backbone-lr", type=float, default=2e-5)
     parser.add_argument("--head-lr", type=float, default=2e-4)
@@ -653,7 +655,7 @@ def parse_args(argv=None):
         weights = population_weights(args.stage, args.balance, args.retention_fraction, args.resolved_policy_pool_weights)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
-    if min(args.steps, args.microbatch_questions, args.max_length, args.eval_every) <= 0 or args.head_steps < 0 or args.max_microbatch_tokens < 0:
+    if min(args.steps, args.microbatch_questions, args.max_length, args.eval_every, args.log_every) <= 0 or args.head_steps < 0 or args.max_microbatch_tokens < 0:
         parser.error("Steps, batch and token limits must be valid positive sizes")
     if args.batch_questions < len(weights) or args.reward_samples < 2:
         parser.error(f"--batch-questions must be >= {len(weights)} and --reward-samples >= 2")
@@ -825,7 +827,7 @@ def main(argv=None):
                 best, best_step = metrics["selection_ce"], step + 1
                 save_best()
         logs.append(item)
-        if step % 12 == 0 or "dev" in item:
+        if step % args.log_every == 0 or "dev" in item:
             dump(out / "train_log.json", logs)
             print(json.dumps(item, allow_nan=False), flush=True)
     torch.cuda.synchronize()
