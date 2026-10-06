@@ -107,6 +107,18 @@
   不能直接开始 critic 训练。下一步要么加入 ViZDoom rollout，要么先做一个
   Maze+Snake-only 的临时训练/采样变体。
 
+## 推理部署与 ViZDoom 修复（2026-10-07）
+
+- **ViZDoom 段错误已修**：根因是 /dev/shm 被用户 proof 的 dsv41-prefix-cache 占满（504G/504G），
+  ViZDoom 的 boost interprocess 共享内存页分配失败 → mmap 后 SIGBUS（BUS_ADRERR）。
+  修复：`sudo mount -o remount,size=520G /dev/shm`（只提高配额不动数据，机器重启或再满需重做）。
+  验证：game.init() + new_episode() 正常。四游戏回放评测不再被阻。
+- **模型对战台**（端口 8820，dashboard/model_arena.py）：5 个服务并行——
+  4 个 s4800 自训 checkpoint（端口 8810/8813/8815/8817，GPU 0/3/5/7）+ 官方发布参照（8819，GPU0）。
+  启动：`CUDA_VISIBLE_DEVICES=<g> venv/bin/python NanoJev/scripts/serve_decisions.py --checkpoint-dir <ckpt> --web-root NanoJev/web --port <p> --disable-native-triton`
+  然后 `venv/bin/python dashboard/model_arena.py --port 8820`。dev 集 4 任务 × 8 题同题对比 + 自定义输入。
+- 游戏成功率回放：ViZDoom 已通，sonic 评测管线待搭建（evaluate_game_policy.py 是旧 toy 线不适用）。
+
 ## 4800 步扩展实验结果（2026-10-07 晨）
 
 - 4 臂 × 4800 步完成（各 8.07h，恒定学习率）。**全部显著优于 600 步**：

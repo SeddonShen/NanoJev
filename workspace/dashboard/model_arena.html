@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>模型对战台 — 四个自训模型 + 官方参照</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI","PingFang SC",sans-serif;
+         background:#0e1116; color:#d7dde6; padding:16px; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:#7b8695; font-size:12px; margin-bottom:12px; }
+  .tabs { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .tab { padding:5px 12px; border:1px solid #232a35; border-radius:8px; background:#131820; cursor:pointer; }
+  .tab.on { border-color:#2f6fed; background:#182234; }
+  .layout { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+  .side { width:250px; min-width:220px; }
+  .probe { padding:6px 10px; border:1px solid #232a35; border-radius:7px; margin-bottom:6px;
+           cursor:pointer; font-size:12.5px; background:#131820; }
+  .probe.on { border-color:#2f6fed; }
+  .main { flex:1; min-width:430px; max-width:900px; }
+  .panel { border:1px solid #232a35; border-radius:10px; background:#131820; padding:12px 14px; margin-bottom:12px; }
+  .panel h2 { font-size:13px; margin:0 0 8px; color:#aeb9c8; }
+  .qhead { font-size:13px; color:#97a3b4; margin:14px 0 6px; }
+  .cand { margin-bottom:9px; }
+  .cand .row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px; }
+  .cand .id { font-weight:600; }
+  .stack { position:relative; height:26px; }
+  .bar { position:absolute; left:0; height:8px; border-radius:4px; opacity:.95; }
+  .pct { position:absolute; font-size:10.5px; color:#8b96a5; }
+  .target-row { font-size:12px; color:#c9a227; margin-top:2px; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-bottom:8px; }
+  .legend span b { color:#d7dde6; }
+  .lat { font-size:11.5px; color:#7b8695; margin-top:6px; }
+  details { margin-top:6px; } summary { cursor:pointer; color:#8b96a5; font-size:12px; }
+  pre { font:11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#9aa6b6; white-space:pre-wrap;
+        max-height:220px; overflow:auto; background:#0d1117; padding:8px; border-radius:6px; }
+  textarea { width:100%; height:120px; background:#0d1117; color:#c7d1de; border:1px solid #232a35;
+             border-radius:7px; padding:8px; font:12px ui-monospace,Menlo,monospace; }
+  button.act { background:#1d2735; color:#d7dde6; border:1px solid #2a3340; border-radius:7px;
+               padding:7px 16px; cursor:pointer; font-size:13px; }
+  button.act:hover { background:#26334a; }
+  .err { color:#f76f6f; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>模型对战台 — 同一道题，四个自训模型 + 官方参照</h1>
+<div class="sub">选一道 dev 集真题 → 并发给 5 个部署的模型 → 看各自给每个候选的概率。金条 = 训练目标（Jev 分布或专家动作）</div>
+<div class="tabs" id="tabs"></div>
+<div class="layout">
+  <div class="side">
+    <div class="panel"><h2>题目（dev 集，每局取一步）</h2><div id="probes"></div></div>
+    <div class="panel"><h2>自定义输入</h2>
+      <div class="sub">state 文本：</div><textarea id="cstate"></textarea>
+      <div class="sub" style="margin-top:6px">问题 JSON：</div><textarea id="cq">{"type":"choice","instructions":"...","criteria":{"a":"...","b":"..."}}</textarea>
+      <div style="margin-top:8px"><button class="act" onclick="runCustom()">评测全部模型</button></div>
+    </div>
+  </div>
+  <div class="main" id="main"><div class="panel">左侧选一道题开始</div></div>
+</div>
+<script>
+"use strict";
+let MODELS=null, PROBES=null, task=null, probe=null;
+const fmt=p=>p==null?"—":(p*100).toFixed(1)+"%";
+
+async function boot(){
+  MODELS=await (await fetch("/api/models")).json();
+  PROBES=await (await fetch("/api/probes")).json();
+  const names={maze:"迷宫",snake:"贪吃蛇",shooting_basic:"射击 Basic",shooting_predict_position:"射击 Predict Position"};
+  const tabs=document.getElementById("tabs");
+  Object.keys(PROBES).forEach((t,i)=>{
+    const b=document.createElement("div"); b.className="tab"+(i===0?" on":"");
+    b.textContent=`${names[t]||t} (${PROBES[t].length})`;
+    b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));b.classList.add("on");task=t;renderProbeList();};
+    tabs.appendChild(b);
+  });
+  task=Object.keys(PROBES)[0]; renderProbeList();
+}
+function renderProbeList(){
+  const box=document.getElementById("probes"); box.innerHTML="";
+  PROBES[task].forEach((p,i)=>{
+    const d=document.createElement("div"); d.className="probe"; d.textContent=p.label;
+    d.onclick=()=>{document.querySelectorAll(".probe").forEach(x=>x.classList.remove("on"));d.classList.add("on");probe=p;runProbe();};
+    box.appendChild(d);
+  });
+}
+async function compare(state, question, extra){
+  const res=await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({state,question})});
+  const data=await res.json();
+  render(data, extra);
+}
+function runProbe(){ compare(probe.state, probe.question, {
+  label: probe.label, target: probe.target, executed: probe.executed,
+  criteria: probe.question.criteria, instructions: probe.question.instructions,
+  qtype: probe.question.type, statePreview: probe.state }); }
+function runCustom(){
+  let q; try{ q=JSON.parse(document.getElementById("cq").value); }catch(e){ alert("问题 JSON 不合法: "+e); return; }
+  const s=document.getElementById("cstate").value; if(!s.trim()||!q.criteria){ alert("需要 state 文本和含 criteria 的问题"); return; }
+  compare(s, q, {label:"自定义", target:null, executed:null,
+    criteria:q.criteria, instructions:q.instructions||"", qtype:q.type||"choice", statePreview:s});
+}
+function render(data, extra){
+  const main=document.getElementById("main"); main.innerHTML="";
+  const head=document.createElement("div"); head.className="panel";
+  head.innerHTML=`<h2>${extra.label}</h2><div class="legend">`+
+    MODELS.map(m=>`<span><b style="color:${m.color}">■</b> ${m.name}${m.tag==="official"?"（参照）":""}</span>`).join("")+
+    `</div><details><summary>展开 state 原文（模型读到的）</summary><pre></pre></details>`;
+  head.querySelector("pre").textContent=extra.statePreview||"";
+  main.appendChild(head);
+  const q=document.createElement("div"); q.className="panel";
+  q.innerHTML=`<h2>问题（${extra.qtype||"choice"}）</h2><div class="sub"></div>`;
+  q.querySelector(".sub").textContent=(extra.instructions||"");
+  const body=document.createElement("div");
+  q.appendChild(body); main.appendChild(q);
+  const crit=extra.criteria||{};
+  const probsByModel=MODELS.map(m=>data.models[m.name]);
+  const candIds=Object.keys(crit);
+  candIds.forEach(cid=>{
+    const block=document.createElement("div"); block.className="cand";
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<span class="id">${cid}${extra.executed===cid?" ✓实际执行":""}${extra.target&&extra.target.gold===cid?" ★专家答案":""}</span><span class="sub">${crit[cid].length>70?crit[cid].slice(0,70)+"…":crit[cid]}</span>`;
+    block.appendChild(row);
+    const stack=document.createElement("div"); stack.className="stack";
+    let y=0;
+    probsByModel.forEach((r,mi)=>{
+      const m=MODELS[mi];
+      const p=r&&r.ok&&r.answers&&r.answers.q0?r.answers.q0[cid]:null;
+      if(p==null)return;
+      const bar=document.createElement("div"); bar.className="bar";
+      bar.style.cssText=`top:${y}px;width:${Math.max(0.4,p*100)}%;background:${m.color}`;
+      const pct=document.createElement("div"); pct.className="pct";
+      pct.style.cssText=`top:${y-2}px;left:calc(${Math.max(0.4,p*100)}% + 6px)`;
+      pct.textContent=`${m.tag==="official"?"官方":m.name.split(" ")[0]} ${fmt(p)}`;
+      stack.appendChild(bar); stack.appendChild(pct);
+      y+=11;
+    });
+    if(extra.target&&extra.target.probs&&extra.target.probs[cid]!=null){
+      const tp=extra.target.probs[cid];
+      const tb=document.createElement("div"); tb.className="bar";
+      tb.style.cssText=`top:${y}px;width:${Math.max(0.4,tp*100)}%;background:#c9a227`;
+      const tpct=document.createElement("div"); tpct.className="pct";
+      tpct.style.cssText=`top:${y-2}px;left:calc(${Math.max(0.4,tp*100)}% + 6px)`;
+      tpct.textContent=`目标 ${fmt(tp)}`;
+      stack.appendChild(tb); stack.appendChild(tpct);
+    }
+    block.appendChild(stack);
+    body.appendChild(block);
+  });
+  const lat=document.createElement("div"); lat.className="lat";
+  lat.textContent=MODELS.map((m,i)=>{const r=probsByModel[i];
+    return r&&r.ok?`${m.name.split(" ")[0]} ${r.latency_ms}ms`:`${m.name} 失败`;}).join(" · ");
+  q.appendChild(lat);
+  const errs=MODELS.filter((m,i)=>probsByModel[i]&&!probsByModel[i].ok);
+  if(errs.length){const e=document.createElement("div");e.className="err";
+    e.textContent=errs.map(m=>`${m.name}: ${probsByModel[MODELS.indexOf(m)].error}`).join("; ");q.appendChild(e);}
+}
+boot();
+</script>
+</body>
+</html>
