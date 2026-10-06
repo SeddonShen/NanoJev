@@ -2,179 +2,245 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>图解：从千问到决策模型</title>
+<title>解剖图：千问 vs NanoJev 的「尾部」</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.65 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  body { margin:0; font:15px/1.7 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
          background:#0e1116; color:#d7dde6; padding:20px; }
-  .wrap { max-width: 1060px; margin: 0 auto; }
-  h1 { font-size:22px; margin:0 0 4px; }
-  h2 { font-size:17px; margin:0 0 12px; color:#aeb9c8; }
-  .sub { color:#7b8695; font-size:13px; margin-bottom:22px; }
+  .wrap { max-width:1120px; margin:0 auto; }
+  h1 { font-size:21px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:0 0 10px; color:#aeb9c8; }
+  .sub { color:#7b8695; font-size:13px; margin-bottom:18px; }
   .card { border:1px solid #232a35; border-radius:12px; background:#131820;
-          padding:18px 20px; margin-bottom:22px; }
-  .note { font-size:13px; color:#97a3b4; margin-top:10px; }
-  .hl { color:#4ff7a0; font-weight:600; }
-  .dim { color:#7b8695; }
-  .mono { font:12.5px ui-monospace,Menlo,Consolas,monospace; }
-  /* 流程图组件 */
-  .flow { display:flex; flex-direction:column; align-items:center; gap:2px; }
-  .frow { display:flex; gap:14px; align-items:stretch; justify-content:center; flex-wrap:wrap; }
-  .box { border:1.5px solid #2a3340; border-radius:9px; padding:9px 14px; text-align:center;
-         background:#171d27; font-size:13.5px; min-width:150px; }
-  .box b { font-size:14px; }
-  .box .small { font-size:11.5px; color:#8b96a5; margin-top:2px; }
-  .box.text-in { border-style:dashed; color:#c7d1de; max-width:420px; text-align:left; }
-  .box.backbone { border-color:#2f6fed; background:#141d33; min-width:300px; }
-  .box.vocab { border-color:#555c66; background:#191c22; color:#8b96a5; }
-  .box.head { border-color:#2ea86e; background:#12241c; }
-  .box.setattn { border-color:#b44ff7; background:#1d1430; }
-  .box.soft { border-color:#f7b64f; background:#2a2214; }
-  .box.dead { opacity:.55; }
-  .arrow { color:#66707e; font-size:17px; line-height:1.2; padding:1px 0; }
-  .arrow.red { color:#f76f6f; }
-  .cols3 { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:10px; align-items:center; }
-  .stack { display:flex; flex-direction:column; gap:8px; justify-content:center; }
-  .bars { display:flex; flex-direction:column; gap:5px; min-width:210px; }
-  .bar-row { display:flex; align-items:center; gap:8px; font-size:12.5px; }
-  .bar-track { flex:1; height:16px; background:#1d232d; border-radius:4px; overflow:hidden; position:relative; }
-  .bar-fill { height:100%; border-radius:4px; }
-  .bar-label { width:52px; text-align:right; }
-  .bar-val { width:44px; color:#97a3b4; }
-  table { border-collapse:collapse; width:100%; font-size:13.5px; margin-top:6px; }
+          padding:16px 18px; margin-bottom:20px; }
+  .note { font-size:13.5px; color:#b7c1cf; margin-top:10px; }
+  .dim { color:#7b8695; } .hl { color:#4ff7a0; font-weight:600; }
+  .mono { font:13px ui-monospace,Menlo,Consolas,monospace; }
+  svg { width:100%; height:auto; display:block; }
+  svg text { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  svg .mono-t { font-family:ui-monospace,Menlo,Consolas,monospace; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
   th,td { border:1px solid #232a35; padding:7px 10px; text-align:left; vertical-align:top; }
-  th { color:#8b96a5; font-weight:600; background:#171d27; }
+  th { color:#8b96a5; background:#171d27; }
   .same { color:#4f8ef7; } .diff { color:#f7944f; font-weight:600; }
-  .grad-arrow { border-top:2px dashed #f76f6f; position:relative; color:#f76f6f;
-                font-size:12px; text-align:right; padding-top:3px; margin:4px 0; }
-  .pin { display:inline-block; background:#1d2735; border:1px solid #2a3340; border-radius:5px;
-         padding:0 6px; font-size:11.5px; margin-left:6px; }
+  .zoom { border:1px dashed #2ea86e; border-radius:10px; padding:12px 16px; margin-top:14px; background:#12241c33; }
 </style>
 </head>
 <body>
 <div class="wrap">
-<h1>图解：从「千问」到「决策模型」，到底改了什么</h1>
-<div class="sub">所有数字与示例都来自我们仓库的真实数据（蛇的那道题）· 蓝框=千问原有且保留 · 绿框=新加 · 黄框=换掉的"最后一步"</div>
+<h1>解剖图：千问和 NanoJev，到底差在「尾部」哪里</h1>
+<div class="sub">看张量形状跟着数据走一遍。蓝=千问原有并保留 · 灰=已弃用 · 绿=新加 · 紫=新加(集合注意力) · 黄=分布</div>
 
-<!-- ============ 图1 原版千问 ============ -->
 <div class="card">
-<h2>① 原版千问：一台「预测下一个词」的机器</h2>
-<div class="flow">
-  <div class="box text-in mono">输入文字："Snake on a 8x8 board. Body: [[4,4],[4,3],[4,2]]. Direction: east. Food: [0,3]…"</div>
-  <div class="arrow">↓ 切成 token</div>
-  <div class="box mono">[Snake] [on] [a] [8] [x] [8] [board] …</div>
-  <div class="arrow">↓ 全部送入</div>
-  <div class="box backbone"><b>28 层 Transformer 骨干</b>（千问本体，约 6 亿参数）
-    <div class="small">把文本变成"理解向量"，每个位置输出一个 1024 维向量</div></div>
-  <div class="arrow">↓ 取最后一个位置的向量 h（1024 维）</div>
-  <div class="box mono">h = [0.21, -0.83, 0.44, …]</div>
-  <div class="arrow">↓ 乘词表投影矩阵 W（150,000 × 1024）</div>
-  <div class="box vocab"><b>词表投影 W</b> —— 1.5 亿参数
-    <div class="small">把 1024 维向量变成 15 万个分数（每个词一个）</div></div>
-  <div class="arrow">↓ softmax</div>
-  <div class="box soft"><b>在 15 万个词上做分布</b>
-    <div class="small">"move" 4% · "the" 3% · "east" 2% · …（15 万项）</div></div>
-  <div class="arrow">↓ 取/采样一个词 → 拼回输入 → 再来一遍（循环）</div>
-  <div class="box">输出文字：一个 token 一个 token 地生成</div>
+<h2>总解剖图（一张图看完）</h2>
+<svg viewBox="0 0 1080 660">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#66707e"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2ea86e"/>
+    </marker>
+    <pattern id="grid" width="12" height="12" patternUnits="userSpaceOnUse">
+      <path d="M12,0 L0,0 0,12" fill="none" stroke="#2a3340" stroke-width="1"/>
+    </pattern>
+    <pattern id="rowl" width="10" height="9" patternUnits="userSpaceOnUse">
+      <path d="M0,9 H10" fill="none" stroke="#4f8ef766" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- ================= 左：共享部分 ================= -->
+  <text x="30" y="26" fill="#8b96a5" font-size="12">① 共享部分：两个模型完全一样（每条箭头上标了张量形状）</text>
+
+  <rect x="30" y="40" width="252" height="44" rx="8" fill="#171d27" stroke="#2a3340" stroke-width="1.5"/>
+  <text x="42" y="58" fill="#d7dde6" font-size="13">输入文字 → 切成 token</text>
+  <text x="42" y="75" fill="#8b96a5" font-size="11" class="mono-t">[Snake][on][a][8][x][8]…  共 365 个</text>
+
+  <line x1="156" y1="84" x2="156" y2="106" stroke="#66707e" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="166" y="100" fill="#66707e" font-size="11" class="mono-t">[365]</text>
+
+  <rect x="30" y="108" width="252" height="196" rx="8" fill="#141d33" stroke="#2f6fed" stroke-width="2"/>
+  <text x="46" y="132" fill="#d7dde6" font-size="14" font-weight="600">Qwen3-0.6B 骨干</text>
+  <text x="46" y="150" fill="#8b96a5" font-size="11.5">28 层 Transformer，一层没动</text>
+  <g stroke="#4f8ef7" stroke-opacity=".55" fill="none">
+    <rect x="46" y="162" width="220" height="11" rx="3"/>
+    <rect x="46" y="179" width="220" height="11" rx="3"/>
+    <rect x="46" y="196" width="220" height="11" rx="3"/>
+    <rect x="46" y="221" width="220" height="11" rx="3" opacity=".55"/>
+    <rect x="46" y="238" width="220" height="11" rx="3" opacity=".55"/>
+    <rect x="46" y="255" width="220" height="11" rx="3" opacity=".55"/>
+    <rect x="46" y="272" width="220" height="11" rx="3" opacity=".3"/>
+  </g>
+  <text x="272" y="171" fill="#66707e" font-size="10.5">每层 = 自注意力 + MLP</text>
+  <text x="272" y="245" fill="#66707e" font-size="10.5" opacity=".6">…共 28 层</text>
+  <text x="46" y="299" fill="#8b96a5" font-size="10.5">读文本 → 产出"理解向量"，不知道词的存在</text>
+
+  <line x1="156" y1="304" x2="156" y2="330" stroke="#66707e" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="166" y="322" fill="#66707e" font-size="11" class="mono-t">[365 × 1024]</text>
+
+  <rect x="56" y="332" width="200" height="96" fill="url(#grid)" stroke="#3a4757" rx="4"/>
+  <text x="60" y="448" fill="#8b96a5" font-size="11">隐藏状态矩阵：每个 token 位置一个 1024 维向量</text>
+  <rect x="58" y="414" width="196" height="10" fill="#4f8ef7" opacity=".95" rx="2"/>
+  <text x="60" y="470" fill="#4f8ef7" font-size="11.5">↑ 取「读出位置」(Decision:)那一行 = h</text>
+
+  <line x1="256" y1="419" x2="322" y2="419" stroke="#66707e" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="262" y="410" fill="#66707e" font-size="11" class="mono-t">[1024]</text>
+
+  <!-- h 向量条 -->
+  <rect x="326" y="350" width="16" height="140" fill="url(#rowl)" stroke="#4f8ef7" rx="3"/>
+  <text x="334" y="342" fill="#4f8ef7" font-size="12.5" text-anchor="middle" font-weight="600">h</text>
+  <text x="334" y="506" fill="#8b96a5" font-size="10.5" text-anchor="middle" class="mono-t">1024 维</text>
+
+  <!-- ================= 右上：千问原版尾巴（灰） ================= -->
+  <text x="430" y="52" fill="#7b8695" font-size="13" font-weight="600">② 千问原版的尾巴 —— NanoJev 已弃用</text>
+  <line x1="342" y1="392" x2="424" y2="170" stroke="#555c66" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah)" opacity=".7"/>
+  <text x="352" y="270" fill="#555c66" font-size="11" transform="rotate(-30 352 270)">乘词表投影</text>
+
+  <g opacity=".62">
+    <rect x="430" y="70" width="52" height="212" fill="url(#grid)" stroke="#555c66" stroke-width="1.5" rx="3"/>
+    <text x="488" y="86" fill="#8b96a5" font-size="12.5" font-weight="600">词表投影矩阵 W</text>
+    <text x="488" y="103" fill="#7b8695" font-size="11" class="mono-t">[150,000 × 1024]（1.5亿参数）</text>
+    <text x="488" y="120" fill="#7b8695" font-size="10.5">每一行 = 词表里的一个词</text>
+    <text x="440" y="64" fill="#f76f6f" font-size="15" font-weight="700">✕</text>
+
+    <line x1="482" y1="176" x2="570" y2="176" stroke="#555c66" stroke-width="1.5" marker-end="url(#ah)"/>
+    <text x="488" y="168" fill="#66707e" font-size="11" class="mono-t">矩阵×向量</text>
+
+    <rect x="574" y="76" width="14" height="200" fill="url(#rowl)" stroke="#555c66" rx="3"/>
+    <text x="594" y="182" fill="#8b96a5" font-size="12">logits</text>
+    <text x="594" y="198" fill="#7b8695" font-size="10.5" class="mono-t">[150,000]</text>
+
+    <line x1="588" y1="176" x2="648" y2="176" stroke="#555c66" stroke-width="1.5" marker-end="url(#ah)"/>
+    <rect x="652" y="146" width="86" height="60" rx="9" fill="#1d1a14" stroke="#555c66" stroke-dasharray="4 3"/>
+    <text x="695" y="172" fill="#8b96a5" font-size="12.5" text-anchor="middle">softmax</text>
+    <text x="695" y="190" fill="#7b8695" font-size="10.5" text-anchor="middle">在 15 万个词上</text>
+
+    <line x1="738" y1="176" x2="788" y2="176" stroke="#555c66" stroke-width="1.5" marker-end="url(#ah)"/>
+    <rect x="792" y="76" width="18" height="200" fill="#f7b64f22" stroke="#555c66" rx="3"/>
+    <rect x="792" y="150" width="18" height="26" fill="#f7b64f" opacity=".5"/>
+    <rect x="792" y="196" width="18" height="14" fill="#f7b64f" opacity=".35"/>
+    <text x="818" y="90" fill="#7b8695" font-size="11.5">下一个词的分布</text>
+    <text x="818" y="106" fill="#66707e" font-size="10.5">"move" 4% · "the" 3% …</text>
+    <text x="818" y="122" fill="#66707e" font-size="10.5" class="mono-t">[150,000] 项</text>
+
+    <path d="M 810 74 C 810 20, 480 8, 240 30" fill="none" stroke="#555c66" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+    <text x="530" y="30" fill="#66707e" font-size="11">采样一个词 → 拼回输入 → 整个重来（循环几百次 = 生成一段文字）</text>
+  </g>
+
+  <!-- ================= 右下：NanoJev 尾巴 ================= -->
+  <text x="430" y="352" fill="#4ff7a0" font-size="13" font-weight="600">③ NanoJev 的尾巴 —— 换成这个</text>
+  <line x1="342" y1="446" x2="424" y2="460" stroke="#2ea86e" stroke-width="1.6" marker-end="url(#ahg)"/>
+  <text x="352" y="452" fill="#2ea86e" font-size="11">3 条候选路径各自读出</text>
+
+  <!-- 三个 h -->
+  <g>
+    <rect x="430" y="368" width="12" height="52" fill="url(#rowl)" stroke="#4f8ef7" rx="2"/>
+    <rect x="430" y="438" width="12" height="52" fill="url(#rowl)" stroke="#4f8ef7" rx="2"/>
+    <rect x="430" y="508" width="12" height="52" fill="url(#rowl)" stroke="#4f8ef7" rx="2"/>
+    <text x="447" y="398" fill="#8b96a5" font-size="11.5" class="mono-t">h₁ [1024] ← 路径"…Candidate: east…"</text>
+    <text x="447" y="468" fill="#8b96a5" font-size="11.5" class="mono-t">h₂ [1024] ← 路径"…Candidate: north…"</text>
+    <text x="447" y="538" fill="#8b96a5" font-size="11.5" class="mono-t">h₃ [1024] ← 路径"…Candidate: south…"</text>
+    <text x="447" y="560" fill="#66707e" font-size="10.5">三条路径在骨干里是同一次前向算出来的</text>
+  </g>
+
+  <!-- LN 圈 -->
+  <g fill="none" stroke="#2ea86e" stroke-width="1.4">
+    <line x1="442" y1="394" x2="478" y2="394" marker-end="url(#ahg)"/>
+    <line x1="442" y1="464" x2="478" y2="464" marker-end="url(#ahg)"/>
+    <line x1="442" y1="534" x2="478" y2="534" marker-end="url(#ahg)"/>
+  </g>
+  <circle cx="496" cy="394" r="15" fill="#12241c" stroke="#2ea86e" stroke-width="1.5"/>
+  <circle cx="496" cy="464" r="15" fill="#12241c" stroke="#2ea86e" stroke-width="1.5"/>
+  <circle cx="496" cy="534" r="15" fill="#12241c" stroke="#2ea86e" stroke-width="1.5"/>
+  <text x="496" y="398" fill="#4ff7a0" font-size="9.5" text-anchor="middle">LN</text>
+  <text x="496" y="468" fill="#4ff7a0" font-size="9.5" text-anchor="middle">LN</text>
+  <text x="496" y="538" fill="#4ff7a0" font-size="9.5" text-anchor="middle">LN</text>
+  <text x="496" y="572" fill="#66707e" font-size="10.5" text-anchor="middle">LayerNorm（稳定数值）</text>
+
+  <!-- 共享 w -->
+  <g fill="none" stroke="#2ea86e" stroke-width="1.4">
+    <line x1="511" y1="394" x2="548" y2="440" marker-end="url(#ahg)"/>
+    <line x1="511" y1="464" x2="548" y2="464" marker-end="url(#ahg)"/>
+    <line x1="511" y1="534" x2="548" y2="488" marker-end="url(#ahg)"/>
+  </g>
+  <rect x="552" y="398" width="14" height="130" fill="url(#rowl)" stroke="#2ea86e" stroke-width="1.8" rx="3"/>
+  <text x="576" y="430" fill="#4ff7a0" font-size="12.5" font-weight="600">打分头 w [1024]</text>
+  <text x="576" y="447" fill="#8b96a5" font-size="11">三个候选用的是</text>
+  <text x="576" y="463" fill="#8b96a5" font-size="11">同一个 w（全局唯一）</text>
+  <text x="576" y="485" fill="#66707e" font-size="10.5" class="mono-t">zᵢ = w · LN(hᵢ) → 一个标量</text>
+  <text x="576" y="501" fill="#66707e" font-size="10.5">分数来自候选的文字内容，</text>
+  <text x="576" y="517" fill="#66707e" font-size="10.5">与它是第几号无关 → 候选数可变</text>
+
+  <!-- z 标量 -->
+  <g fill="none" stroke="#2ea86e" stroke-width="1.4">
+    <line x1="566" y1="420" x2="672" y2="400" marker-end="url(#ahg)"/>
+    <line x1="566" y1="464" x2="672" y2="464" marker-end="url(#ahg)"/>
+    <line x1="566" y1="506" x2="672" y2="528" marker-end="url(#ahg)"/>
+  </g>
+  <rect x="676" y="388" width="28" height="24" fill="#12241c" stroke="#2ea86e" rx="4"/>
+  <rect x="676" y="452" width="28" height="24" fill="#12241c" stroke="#2ea86e" rx="4"/>
+  <rect x="676" y="516" width="28" height="24" fill="#12241c" stroke="#2ea86e" rx="4"/>
+  <text x="690" y="405" fill="#4ff7a0" font-size="11" text-anchor="middle" class="mono-t">z₁</text>
+  <text x="690" y="469" fill="#4ff7a0" font-size="11" text-anchor="middle" class="mono-t">z₂</text>
+  <text x="690" y="533" fill="#4ff7a0" font-size="11" text-anchor="middle" class="mono-t">z₃</text>
+
+  <!-- 集合注意力 -->
+  <g fill="none" stroke="#b44ff7" stroke-width="1.5">
+    <line x1="704" y1="400" x2="738" y2="430" marker-end="url(#ah)"/>
+    <line x1="704" y1="464" x2="738" y2="464" marker-end="url(#ah)"/>
+    <line x1="704" y1="528" x2="738" y2="498" marker-end="url(#ah)"/>
+  </g>
+  <rect x="742" y="420" width="104" height="88" rx="10" fill="#1d1430" stroke="#b44ff7" stroke-width="1.8"/>
+  <text x="794" y="448" fill="#d9b8ff" font-size="12" text-anchor="middle" font-weight="600">集合注意力</text>
+  <text x="794" y="466" fill="#a98fd4" font-size="10.5" text-anchor="middle">三个候选互相</text>
+  <text x="794" y="481" fill="#a98fd4" font-size="10.5" text-anchor="middle">看一眼再微调分数</text>
+  <text x="794" y="499" fill="#7d68a3" font-size="9.5" text-anchor="middle">(只 Choice 题有)</text>
+
+  <!-- softmax -->
+  <line x1="846" y1="464" x2="890" y2="464" stroke="#66707e" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="852" y="455" fill="#66707e" font-size="11" class="mono-t">[3]</text>
+  <rect x="894" y="434" width="78" height="60" rx="9" fill="#2a2214" stroke="#f7b64f" stroke-width="1.8"/>
+  <text x="933" y="459" fill="#f7d94f" font-size="12.5" text-anchor="middle">softmax</text>
+  <text x="933" y="477" fill="#c9a94f" font-size="10.5" text-anchor="middle">只在 3 个候选上</text>
+
+  <!-- 输出分布 -->
+  <line x1="972" y1="464" x2="1000" y2="464" stroke="#66707e" stroke-width="1.6" marker-end="url(#ah)"/>
+  <rect x="1004" y="368" width="26" height="126" fill="#4f8ef7" opacity=".85" rx="3"/>
+  <rect x="1004" y="494" width="26" height="44" fill="#4f8ef7" opacity=".55" rx="3"/>
+  <rect x="1004" y="538" width="26" height="14" fill="#4f8ef7" opacity=".35" rx="3"/>
+  <text x="1036" y="430" fill="#d7dde6" font-size="11.5">east 0.69</text>
+  <text x="1036" y="520" fill="#97a3b4" font-size="11.5">north 0.24</text>
+  <text x="1036" y="550" fill="#7b8695" font-size="11.5">south 0.07</text>
+  <text x="1004" y="578" fill="#4ff7a0" font-size="11.5">一次前向直接得到 · 无循环（~30ms）</text>
+</svg>
+
+<div class="zoom">
+<b style="color:#4ff7a0">放大镜：打分头 w 到底干了什么（就是一个点积）</b>
+<div class="mono" style="margin-top:6px">
+h₁ = (0.21, −0.83, 0.44, …) &nbsp;&nbsp;<span class="dim">← "east" 那条路径末尾的 1024 个数</span><br>
+w&nbsp; = (0.50,&nbsp; 0.30,&nbsp; 0.12, …) &nbsp;&nbsp;<span class="dim">← 打分头的 1024 个权重（所有候选共用）</span><br>
+z₁ = 0.21×0.50 + (−0.83)×0.30 + 0.44×0.12 + … = <b>−0.06</b> &nbsp;&nbsp;<span class="dim">← 一个标量。h₂、h₃ 同样算法 → z₂、z₃</span>
 </div>
-<div class="note">训练方式：拿海量文本，让这个分布逼近"真实的下一个词"（交叉熵）。
-<span class="hl">注意：骨干（蓝框）只负责把文字变成向量，"预测下一个词"是最后乘 W 才发生的。</span></div>
+<div class="note" style="margin-top:8px">对比千问：logits = W·h，W 有 <b>15 万行</b> → 一次吐出 15 万个数（每个词一个）；
+w 只有 <b>1024 个数</b> → 一次吐出 <b>1 个数</b>。候选再多，也只是"多算几次点积"，然后在这 K 个数上 softmax。</div>
 </div>
 
-<!-- ============ 图2 NanoJev ============ -->
-<div class="card">
-<h2>② NanoJev：骨干一模一样，换掉"最后一步"</h2>
-<div class="flow">
-  <div class="frow">
-    <div class="stack">
-      <div class="box text-in mono" style="max-width:250px">路径①文本：<br>State:蛇的局面前半…<br>Question:选方向…<br><b>Candidate: east: "Move east to [4,5]."</b><br>Decision:⟨eos⟩</div>
-      <div class="box text-in mono" style="max-width:250px">路径②文本：同上，候选换成<br><b>north: "Move north to [3,4]."</b></div>
-      <div class="box text-in mono" style="max-width:250px">路径③文本：同上，候选换成<br><b>south: "Move south to [5,4]."</b></div>
-    </div>
-    <div class="arrow" style="font-size:22px">→</div>
-    <div class="box backbone" style="min-width:230px; align-self:center"><b>同一个骨干</b><br>28 层 Transformer
-      <div class="small">三条路径放进<b>同一次前向</b>计算；<br>结构与参数和千问完全相同</div></div>
-    <div class="arrow" style="font-size:22px">→</div>
-    <div class="stack">
-      <div class="box mono">h₁（读出位置的向量）</div>
-      <div class="box mono">h₂</div>
-      <div class="box mono">h₃</div>
-    </div>
-    <div class="arrow" style="font-size:22px">→</div>
-    <div class="stack">
-      <div class="box head"><b>打分头 w</b> → 分数 z₁<div class="small">w·LayerNorm(h₁)，一个标量</div></div>
-      <div class="box head"><b>同一个 w</b> → z₂<div class="small">候选项换了，w 不换</div></div>
-      <div class="box head"><b>同一个 w</b> → z₃</div>
-      <div class="box setattn">集合注意力（紫色）：三个候选互相对比后微调 z₁z₂z₃</div>
-    </div>
-    <div class="arrow" style="font-size:22px">→</div>
-    <div class="stack">
-      <div class="box soft"><b>softmax<br>只在 3 个候选上</b></div>
-      <div class="bars">
-        <div class="bar-row"><span class="bar-label">east</span><div class="bar-track"><div class="bar-fill" style="width:69%;background:#4f8ef7"></div></div><span class="bar-val">0.69</span></div>
-        <div class="bar-row"><span class="bar-label">north</span><div class="bar-track"><div class="bar-fill" style="width:24%;background:#4f8ef7"></div></div><span class="bar-val">0.24</span></div>
-        <div class="bar-row"><span class="bar-label">south</span><div class="bar-track"><div class="bar-fill" style="width:7%;background:#4f8ef7"></div></div><span class="bar-val">0.07</span></div>
-      </div>
-      <div class="box dead vocab"><s>词表投影 W</s> ❌ 不再使用</div>
-    </div>
-  </div>
-</div>
-<div class="note">
-<b>没有生成循环</b>：一次前向，直接读出 K 个分数 → 分布（30ms 的来源）。
-<b>候选数随便变</b>：打分头给"一段文字"打分，与这题有几个候选无关 —— 2 个候选或 255 个候选，模型参数一个不加。这就是"动态候选"。
-</div>
+<div class="note">读图要点：<b>左半边（蓝）两个模型一字不差</b>——文字进、token 进骨干、取出 1024 维向量 h。
+分歧只在 h 之后：千问拿 h 去乘 15 万行的词表矩阵、在词表上做分布、循环生成（上灰分支，已弃用）；
+NanoJev 对每条候选路径的 h 做一次点积得一个分数、在 K 个候选上做分布、直接输出（下绿分支）。</div>
 </div>
 
-<!-- ============ 图3 训练 ============ -->
 <div class="card">
-<h2>③ 训练时算什么：没有"下一个词"，只有"答案分布"</h2>
-<div class="frow" style="align-items:center">
-  <div class="stack" style="min-width:220px">
-    <div class="box head">学生分布（模型刚输出）</div>
-    <div class="bars">
-      <div class="bar-row"><span class="bar-label">east</span><div class="bar-track"><div class="bar-fill" style="width:40%;background:#4f8ef7"></div></div><span class="bar-val">0.40</span></div>
-      <div class="bar-row"><span class="bar-label">north</span><div class="bar-track"><div class="bar-fill" style="width:35%;background:#4f8ef7"></div></div><span class="bar-val">0.35</span></div>
-      <div class="bar-row"><span class="bar-label">south</span><div class="bar-track"><div class="bar-fill" style="width:25%;background:#4f8ef7"></div></div><span class="bar-val">0.25</span></div>
-    </div>
-  </div>
-  <div class="arrow" style="font-size:22px">vs</div>
-  <div class="stack" style="min-width:220px">
-    <div class="box" style="border-color:#c9a227">目标分布（这道题的标签）</div>
-    <div class="bars">
-      <div class="bar-row"><span class="bar-label">east</span><div class="bar-track"><div class="bar-fill" style="width:60%;background:#c9a227"></div></div><span class="bar-val">0.60</span></div>
-      <div class="bar-row"><span class="bar-label">north</span><div class="bar-track"><div class="bar-fill" style="width:38%;background:#c9a227"></div></div><span class="bar-val">0.38</span></div>
-      <div class="bar-row"><span class="bar-label">south</span><div class="bar-track"><div class="bar-fill" style="width:2%;background:#c9a227"></div></div><span class="bar-val">0.02</span></div>
-    </div>
-    <div class="note" style="margin-top:2px">迷宫/贪吃蛇：Jev API 的分布<br>射击：专家实际动作（100% 一根柱）</div>
-  </div>
-  <div class="arrow" style="font-size:22px">→</div>
-  <div class="stack" style="min-width:260px">
-    <div class="box soft"><b>交叉熵 loss</b>
-      <div class="mono small" style="text-align:left">loss = −( 0.60·log 0.40<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; + 0.38·log 0.35<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; + 0.02·log 0.25 ) ≈ 1.03</div></div>
-    <div class="grad-arrow">梯度反向传播 ⟵ ⟵ ⟵</div>
-    <div class="box head">更新打分头 w（学习率 1e-4，从头学）</div>
-    <div class="grad-arrow">⟵ 穿过 softmax 继续往回</div>
-    <div class="box backbone">也更新 28 层骨干（学习率 1e-5，微调）<div class="small">更新方向是"把向量变得更利于打分"，不是"更会预测下个词"</div></div>
-  </div>
-</div>
-<div class="note">几万道题反复循环 → 学生分布逼近目标分布 → dev CE 从 0.95 降到 0.56（我们 4800 步实测）。</div>
-</div>
-
-<!-- ============ 对比表 ============ -->
-<div class="card">
-<h2>④ 一张表总结改动</h2>
+<h2>训练信号（为什么它不再是"语言模型"的用法）</h2>
 <table>
 <tr><th></th><th>原版千问</th><th>NanoJev</th></tr>
-<tr><td>输入</td><td class="same">文本 → token</td><td class="same">相同（局面/候选都是文本）</td></tr>
-<tr><td>骨干 28 层</td><td class="same">文本 → 理解向量 h</td><td class="same">结构零改动（训练后参数被更新）</td></tr>
-<tr><td>输出投影</td><td>词表矩阵 W（15万类）</td><td class="diff">打分头 w：向量 → 单个分数</td></tr>
-<tr><td>分布做在什么上面</td><td>15 万个词</td><td class="diff">本题的 K 个候选（K 随题目变）</td></tr>
-<tr><td>额外结构</td><td>无</td><td class="diff">集合注意力（候选互相比较）</td></tr>
-<tr><td>训练标签</td><td>下一个 token 是什么</td><td class="diff">答案分布是什么（Jev 分布 / 专家动作）</td></tr>
-<tr><td>使用方式</td><td>逐 token 循环生成</td><td class="diff">一次前向直接出分布（~30ms）</td></tr>
+<tr><td>每条数据的标签</td><td>下一个 token 是哪个词</td><td class="diff">答案分布：{east:0.60, north:0.38, south:0.02}（Jev API 给的）或专家动作（一根 100% 的柱）</td></tr>
+<tr><td>loss</td><td>对 15 万维分布算交叉熵</td><td class="diff">对 K 维分布算交叉熵：−Σ 目标ᵢ·log 学生ᵢ</td></tr>
+<tr><td>梯度更新谁</td><td>W + 骨干</td><td class="diff">打分头 w（lr 1e-4）+ 骨干（lr 1e-5）——<b>W 彻底不参与</b></td></tr>
+<tr><td>训练后骨干的变化</td><td>更会预测下一个词</td><td class="diff">向量 h 变得"更利于给候选打分"（阅读能力保留，特化方向变了）</td></tr>
 </table>
-<div class="note">一句话：<span class="hl">千问的身体（读懂文本的能力）原封保留；换掉的是"出口"（词表→打分头）和"练习册"（下个词→答案分布）</span>。它确实不再是语言模型的用法，但它依然是那台语言模型的机器改造出来的打分器。</div>
+<div class="note">一句话：<span class="hl">左半边（读文本的能力）是千问的；右下角这个"点积 → softmax → 分布"的小尾巴是我们的。</span>词表投影 W 还在硬盘里，但这条流程从头到尾没有用到它。</div>
 </div>
 </div>
 </body>
