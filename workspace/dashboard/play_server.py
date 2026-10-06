@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import sys
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -105,6 +106,74 @@ def play_episode(model_port, game, seed, epsilon):
         env.close()
 
 
+SESSIONS = {}
+_NEXT_SID = [0]
+
+
+def _view(obs):
+    return {"state": obs["state"] if obs else "",
+            "candidates": dict(obs["candidates"]) if obs else {}}
+
+
+def live_start(model_port, game, seed, epsilon):
+    if game in ("maze", "snake"):
+        from unified_grid_envs import UnifiedMazeEnv, UnifiedSnakeEnv
+        env = (UnifiedMazeEnv if game == "maze" else UnifiedSnakeEnv)(dict(GAMES[game]["spec"]))
+    else:
+        from unified_doom_env import UnifiedDoomEnv
+        env = UnifiedDoomEnv(dict(GAMES[game]["spec"]))
+    obs, info = env.reset(seed)
+    import random
+    _NEXT_SID[0] += 1
+    sid = f"s{_NEXT_SID[0]}"
+    SESSIONS[sid] = {"env": env, "obs": obs, "model_port": model_port, "game": game,
+                     "seed": seed, "epsilon": epsilon, "rng": random.Random(seed + 999),
+                     "steps": [], "is_doom": game in ("basic", "predict_position")}
+    return {"ok": True, "sid": sid, "game": game, "seed": seed, **_view(obs)}
+
+
+def live_step(sid):
+    session = SESSIONS.get(sid)
+    if not session:
+        return {"ok": False, "error": "unknown session"}
+    env, obs = session["env"], session["obs"]
+    if session.get("done") or not obs.get("candidates"):
+        env.close()
+        steps = session["steps"]
+        final = steps[-1] if steps else {}
+        return {"ok": True, "done": True, "steps": len(steps),
+                "success": bool(final.get("success")), "outcome": final.get("outcome") or "no_step"}
+    offered = dict(obs["candidates"])
+    seen_state = obs["state"]
+    t0 = time.perf_counter()
+    if len(offered) >= 2:
+        probs = ask_model(session["model_port"], seen_state, offered)
+        if session["epsilon"] and session["rng"].random() < session["epsilon"]:
+            chosen = session["rng"].choice(sorted(offered))
+        else:
+            chosen = max(sorted(probs), key=lambda k: probs.get(k, 0))
+    else:
+        probs, chosen = {a: 1.0 for a in offered}, next(iter(offered))
+    inference_ms = round((time.perf_counter() - t0) * 1000, 1)
+    t1 = time.perf_counter()
+    frame = doom_frame(env) if session["is_doom"] else None
+    obs, reward, done, trunc, step_info = env.step(chosen)
+    session["obs"], session["done"] = obs, done or trunc
+    step = {
+        "decision": len(session["steps"]) + 1,
+        "state": seen_state, "candidates": offered,
+        "probs": probs, "chosen": chosen,
+        "success": step_info.get("success", (step_info.get("episode_metrics") or {}).get("success")),
+        "outcome": step_info.get("outcome") or (step_info.get("episode_metrics") or {}).get("outcome"),
+        "events": step_info.get("physical_events", [])[:3],
+        "frame": frame,
+    }
+    session["steps"].append(step)
+    return {"ok": True, "done": False, "step": step, "inference_ms": inference_ms,
+            "step_total_ms": round((time.perf_counter() - t1) * 1000, 1),
+            "next": _view(obs)}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json"):
         self.send_response(code)
@@ -123,13 +192,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found")
 
     def do_POST(self):
-        if self.path != "/api/play":
-            self._send(404, b"not found")
-            return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         try:
-            result = play_episode(int(body["model_port"]), body["game"],
-                                  int(body.get("seed", 17)), float(body.get("epsilon", 0)))
+            if self.path == "/api/play":
+                result = play_episode(int(body["model_port"]), body["game"],
+                                      int(body.get("seed", 17)), float(body.get("epsilon", 0)))
+            elif self.path == "/api/live/start":
+                result = live_start(int(body["model_port"]), body["game"],
+                                    int(body.get("seed", 17)), float(body.get("epsilon", 0)))
+            elif self.path == "/api/live/step":
+                result = live_step(body["sid"])
+            else:
+                self._send(404, b"not found")
+                return
             self._send(200, json.dumps(result, ensure_ascii=False).encode())
         except Exception as exc:
             import traceback

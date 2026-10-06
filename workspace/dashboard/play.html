@@ -45,8 +45,10 @@
 <div class="sub">选模型和游戏 → 点"开一局" → 模型每步自己决策（贪心选最高概率动作）。可以逐步回看它当时看到了什么、想了什么</div>
 <div class="tabs" id="tabs"></div>
 <div class="ctrl">
+  模式 <select id="mode"><option value="live">实时（边推边看，显示每步耗时）</option><option value="replay">整局速跑 + 回放</option></select>
   模型 <select id="model"></select>
   种子 <input type="number" id="seed" value="17" style="width:70px">
+  节奏 <select id="pace"><option value="0">全速</option><option value="300">0.3s/步</option><option value="700">0.7s/步</option></select>
   <button class="go" id="go">▶ 开一局</button>
   <span id="busy" class="busy"></span>
 </div>
@@ -88,6 +90,8 @@ GAMES.forEach(([g,label])=>{const b=document.createElement("div");b.className="t
   $("tabs").appendChild(b);});
 
 $("go").onclick=async()=>{
+  stopPlay();
+  if($("mode").value==="live"){ await startLive(); return; }
   $("busy").textContent="对局进行中…（每步一次模型推理）";
   try{
     const res=await fetch("/api/play",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -96,13 +100,50 @@ $("go").onclick=async()=>{
     if(!data.ok){$("busy").textContent="失败："+data.error;console.error(data.trace);return;}
     ep=data; idx=0;
     $("slider").max=data.steps.length-1; $("slider").value=0;
-    const r=$("result");
-    r.innerHTML=`<div class="banner ${data.success?"win":"lose"}">${data.success?"✓ 成功":"✗ 失败"} — ${data.outcome}</div>
-      <div class="meta">共 ${data.n_decisions} 次决策 · 种子 ${data.seed}</div>`;
+    showResult(data);
     $("busy").textContent="";
     stopPlay(); draw();
   }catch(e){$("busy").textContent="请求失败："+e;}
 };
+function showResult(data){
+  const r=$("result");
+  r.innerHTML=`<div class="banner ${data.success?"win":"lose"}">${data.success?"✓ 成功":"✗ 失败"} — ${data.outcome}</div>
+    <div class="meta">共 ${data.n_decisions??data.steps} 次决策 · 种子 ${data.seed}</div>`;
+}
+let liveTimer=null, liveLat=[];
+function stopLive(){ if(liveTimer){clearTimeout(liveTimer);liveTimer=null;} }
+async function startLive(){
+  $("busy").textContent="开始实时对局…";
+  const res=await fetch("/api/live/start",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model_port:+$("model").value,game:game,seed:+$("seed").value})});
+  const data=await res.json();
+  if(!data.ok){$("busy").textContent="失败："+data.error;return;}
+  ep={game:game,seed:data.seed,steps:[]}; idx=-1;
+  $("slider").max=0; $("slider").value=0;
+  $("result").innerHTML='<div class="meta">实时进行中…每一步都是刚发生的推理</div>';
+  $("busy").textContent="";
+  liveLat=[];
+  liveLoop(data.sid);
+}
+async function liveLoop(sid){
+  try{
+    const res=await fetch("/api/live/step",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({sid})});
+    const data=await res.json();
+    if(!data.ok){$("busy").textContent="失败："+data.error;return;}
+    if(data.done){
+      liveLat.length && ($("legend").textContent+=` · 本局推理均值 ${(liveLat.reduce((a,b)=>a+b,0)/liveLat.length).toFixed(0)}ms`);
+      showResult({success:data.success,outcome:data.outcome,steps:data.steps,seed:ep.seed});
+      return;
+    }
+    ep.steps.push(data.step); idx=ep.steps.length-1;
+    $("slider").max=idx; $("slider").value=idx;
+    liveLat.push(data.inference_ms);
+    draw();
+    $("legend").textContent=`第 ${data.step.decision} 步 · 本步推理 ${data.inference_ms}ms · 选择 ${data.step.chosen}`;
+    liveTimer=setTimeout(()=>liveLoop(sid), +$("pace").value);
+  }catch(e){$("busy").textContent="实时模式出错："+e;}
+}
 $("prev").onclick=()=>{if(ep&&idx>0){idx--;draw();}};
 $("next").onclick=()=>{if(ep&&idx<ep.steps.length-1){idx++;draw();}};
 $("slider").oninput=e=>{if(ep){idx=+e.target.value;draw();}};
