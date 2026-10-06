@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>看模型玩游戏 — NanoJev 实机游玩</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI","PingFang SC",sans-serif;
+         background:#0e1116; color:#d7dde6; padding:16px; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:#7b8695; font-size:12px; margin-bottom:10px; }
+  .ctrl { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  select, input[type=number] { background:#1d2735; color:#d7dde6; border:1px solid #2a3340;
+        border-radius:7px; padding:6px 8px; font-size:13px; }
+  button { background:#1d2735; color:#d7dde6; border:1px solid #2a3340; border-radius:7px;
+           padding:6px 14px; cursor:pointer; font-size:13px; }
+  button:hover { background:#26334a; }
+  button.go { border-color:#2f6fed; background:#182234; }
+  .tabs { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .tab { padding:5px 12px; border:1px solid #232a35; border-radius:8px; background:#131820; cursor:pointer; }
+  .tab.on { border-color:#2f6fed; background:#182234; }
+  .layout { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .stage { border:1px solid #232a35; border-radius:10px; background:#131820; padding:12px; }
+  canvas, img.fram { display:block; border-radius:6px; image-rendering:pixelated; }
+  .side { flex:1; min-width:330px; max-width:620px; }
+  .panel { border:1px solid #232a35; border-radius:10px; background:#131820; padding:12px 14px; margin-bottom:12px; }
+  .panel h2 { font-size:13px; margin:0 0 8px; color:#aeb9c8; }
+  .banner { font-size:15px; font-weight:700; margin-bottom:6px; }
+  .banner.win { color:#4ff7a0; } .banner.lose { color:#f76f6f; }
+  .cand { margin-bottom:8px; }
+  .cand .row { display:flex; justify-content:space-between; font-size:13px; }
+  .cand.chosen { border:1px solid #2ea86e; border-radius:8px; padding:6px 8px; }
+  .bar { height:8px; background:#1d232d; border-radius:4px; margin-top:4px; overflow:hidden; }
+  .bar > div { height:100%; background:#4f8ef7; border-radius:4px; }
+  .meta { font-size:12px; color:#97a3b4; }
+  details { margin-top:6px; } summary { cursor:pointer; color:#8b96a5; font-size:12px; }
+  pre { font:11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#9aa6b6; white-space:pre-wrap;
+        max-height:200px; overflow:auto; background:#0d1117; padding:8px; border-radius:6px; }
+  .busy { color:#f7b64f; font-size:13px; }
+</style>
+</head>
+<body>
+<h1>看模型玩游戏 — 你的 4 个模型 + 官方参照，实机游玩</h1>
+<div class="sub">选模型和游戏 → 点"开一局" → 模型每步自己决策（贪心选最高概率动作）。可以逐步回看它当时看到了什么、想了什么</div>
+<div class="tabs" id="tabs"></div>
+<div class="ctrl">
+  模型 <select id="model"></select>
+  种子 <input type="number" id="seed" value="17" style="width:70px">
+  <button class="go" id="go">▶ 开一局</button>
+  <span id="busy" class="busy"></span>
+</div>
+<div class="layout">
+  <div class="stage">
+    <div id="gamewrap"><canvas id="cv" width="480" height="480"></canvas></div>
+    <div class="ctrl" style="margin-top:10px">
+      <button id="prev">◀</button>
+      <button id="play">自动播放</button>
+      <button id="next">▶</button>
+      <input type="range" id="slider" min="0" max="0" value="0" style="width:170px">
+      <span class="meta" id="pos"></span>
+    </div>
+    <div class="meta" id="legend"></div>
+  </div>
+  <div class="side">
+    <div class="panel"><h2>本局结果</h2><div id="result">先开一局</div></div>
+    <div class="panel"><h2>本步决策（模型看到的候选与概率）</h2><div id="choices"></div></div>
+    <div class="panel"><h2>本步状态原文（模型读到的）</h2>
+      <details><summary>展开</summary><pre id="raw"></pre></details></div>
+  </div>
+</div>
+<script>
+"use strict";
+const MODELS=[
+  {name:"hard_lr1e5 ×4800",port:8810,color:"#4f8ef7"},
+  {name:"hard_lr2e5 ×4800",port:8813,color:"#f7944f"},
+  {name:"soft_lr1e5 ×4800",port:8815,color:"#4ff7a0"},
+  {name:"soft_lr2e5 ×4800",port:8817,color:"#f76fb0"},
+  {name:"官方发布 @400",port:8819,color:"#c9a227"}];
+const GAMES=[["maze","迷宫"],["snake","贪吃蛇"],["basic","射击 Basic"],["predict_position","射击 Predict Position"]];
+let game="maze", ep=null, idx=0, timer=null;
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+const $=id=>document.getElementById(id);
+
+MODELS.forEach(m=>{const o=document.createElement("option");o.value=m.port;o.textContent=m.name;$("model").appendChild(o);});
+GAMES.forEach(([g,label])=>{const b=document.createElement("div");b.className="tab"+(g===game?" on":"");b.textContent=label;
+  b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));b.classList.add("on");game=g;};
+  $("tabs").appendChild(b);});
+
+$("go").onclick=async()=>{
+  $("busy").textContent="对局进行中…（每步一次模型推理）";
+  try{
+    const res=await fetch("/api/play",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({model_port:+$("model").value,game:game,seed:+$("seed").value})});
+    const data=await res.json();
+    if(!data.ok){$("busy").textContent="失败："+data.error;console.error(data.trace);return;}
+    ep=data; idx=0;
+    $("slider").max=data.steps.length-1; $("slider").value=0;
+    const r=$("result");
+    r.innerHTML=`<div class="banner ${data.success?"win":"lose"}">${data.success?"✓ 成功":"✗ 失败"} — ${data.outcome}</div>
+      <div class="meta">共 ${data.n_decisions} 次决策 · 种子 ${data.seed}</div>`;
+    $("busy").textContent="";
+    stopPlay(); draw();
+  }catch(e){$("busy").textContent="请求失败："+e;}
+};
+$("prev").onclick=()=>{if(ep&&idx>0){idx--;draw();}};
+$("next").onclick=()=>{if(ep&&idx<ep.steps.length-1){idx++;draw();}};
+$("slider").oninput=e=>{if(ep){idx=+e.target.value;draw();}};
+$("play").onclick=()=>{if(!ep)return;if(timer){stopPlay();return;}
+  timer=setInterval(()=>{if(idx<ep.steps.length-1){idx++;draw();}else stopPlay();},700);
+  $("play").textContent="⏸ 暂停";};
+function stopPlay(){if(timer){clearInterval(timer);timer=null;}$("play").textContent="自动播放";}
+
+function parseGrid(s){
+  const g=s.match(/reach goal \[(\d+),(\d+)\]/), a=s.match(/Agent coordinate: \((\d+),(\d+)\)/);
+  const lm=s.match(/Local map:\n(.{5}\n.{5}\n.{5}\n.{5}\n.{5})/);
+  const rows=(s.match(/^(\d+):/gm)||[]).length, cols=(s.match(/x(\d+)/)||[])[1];
+  return {goal:g?[+g[1],+g[2]]:null, agent:a?[+a[1],+a[2]]:null,
+          local:lm?lm[1].split("\n"):[], rows:rows||8, cols:+(cols||8)};
+}
+function parseSnake(s){
+  const b=s.match(/Body head first: (\[\[.*?\]\])/), f=s.match(/Current food: \[(\d+),(\d+)\]/);
+  const bd=s.match(/Snake on a (\d+)x(\d+) board/), d=s.match(/Direction: (\w+)/);
+  return {body:b?JSON.parse(b[1]):[], food:f?[+f[1],+f[2]]:null,
+          rows:+(bd?bd[1]:8), cols:+(bd?bd[2]:8), dir:d?d[1]:""};
+}
+function grid(rows,cols,cell){cv.width=cols*cell;cv.height=rows*cell;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){ctx.fillStyle="#39414e";ctx.fillRect(c*cell,r*cell,cell-1,cell-1);}}
+function draw(){
+  if(!ep)return;
+  const s=ep.steps[idx];
+  $("slider").value=idx;
+  $("pos").textContent=`第 ${idx+1}/${ep.steps.length} 步`;
+  if(ep.game==="maze"){
+    const p=parseGrid(s.state); const cell=Math.min(48,Math.floor(480/Math.max(p.rows,p.cols)));
+    grid(p.rows,p.cols,cell);
+    if(p.agent&&p.local.length===5){
+      for(let i=0;i<5;i++)for(let j=0;j<5;j++){
+        const ch=p.local[i][j], r=p.agent[0]-2+i, c=p.agent[1]-2+j;
+        if(r<0||c<0||r>=p.rows||c>=p.cols||ch==="X")continue;
+        ctx.fillStyle=ch==="#"?"#161b22":"#2b3442"; ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
+      }
+    }
+    if(p.goal){ctx.fillStyle="#f7d94f";ctx.font=`bold ${cell*.55}px sans-serif`;ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.fillText("★",p.goal[1]*cell+cell/2-2,p.goal[0]*cell+cell/2+2);}
+    if(p.agent){ctx.fillStyle="#4f8ef7";ctx.beginPath();
+      ctx.arc(p.agent[1]*cell+cell/2,p.agent[0]*cell+cell/2,cell*.3,0,7);ctx.fill();}
+    $("legend").textContent=`● 智能体 · ★ 目标 · 本步选择: ${s.chosen} · ${s.outcome}`;
+  } else if(ep.game==="snake"){
+    const p=parseSnake(s.state); const cell=Math.min(56,Math.floor(480/Math.max(p.rows,p.cols)));
+    grid(p.rows,p.cols,cell);
+    p.body.forEach((seg,i)=>{ctx.fillStyle=i===0?"#4ff7a0":`rgb(${40+Math.max(0,90-i*8)},${150-i*6},90)`;
+      ctx.fillRect(seg[1]*cell+3,seg[0]*cell+3,cell-7,cell-7);});
+    if(p.food){ctx.fillStyle="#f76f6f";ctx.beginPath();
+      ctx.arc(p.food[1]*cell+cell/2,p.food[0]*cell+cell/2,cell*.22,0,7);ctx.fill();}
+    $("legend").textContent=`方向 ${p.dir} · 本步选择: ${s.chosen} · ${s.outcome}`;
+  } else {
+    const wrap=$("gamewrap");
+    if(!wrap.querySelector("img.fram")){wrap.innerHTML='<img class="fram" width="640" height="480">';}
+    const img=wrap.querySelector("img.fram");
+    if(s.frame) img.src="data:image/png;base64,"+s.frame;
+    $("legend").textContent=`本步选择: ${s.chosen} · ${s.outcome}`;
+  }
+  drawChoices(s); $("raw").textContent=s.state;
+}
+function drawChoices(s){
+  const box=$("choices"); box.innerHTML="";
+  Object.keys(s.candidates).forEach(cid=>{
+    const p=s.probs[cid]??null;
+    const d=document.createElement("div"); d.className="cand"+(cid===s.chosen?" chosen":"");
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<span style="font-weight:600">${cid}${cid===s.chosen?" ✓执行":""}</span><span class="meta">${p==null?"":(p*100).toFixed(1)+"%"}</span>`;
+    d.appendChild(row);
+    const b=document.createElement("div"); b.className="bar";
+    const inner=document.createElement("div");
+    inner.style.width=(p!=null?(p*100):0)+"%"; b.appendChild(inner); d.appendChild(b);
+    box.appendChild(d);
+  });
+  if(!Object.keys(s.candidates).length) box.innerHTML='<div class="meta">（终局，无候选）</div>';
+}
+</script>
+</body>
+</html>

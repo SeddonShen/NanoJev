@@ -117,6 +117,10 @@
   4 个 s4800 自训 checkpoint（端口 8810/8813/8815/8817，GPU 0/3/5/7）+ 官方发布参照（8819，GPU0）。
   启动：`CUDA_VISIBLE_DEVICES=<g> venv/bin/python NanoJev/scripts/serve_decisions.py --checkpoint-dir <ckpt> --web-root NanoJev/web --port <p> --disable-native-triton`
   然后 `venv/bin/python dashboard/model_arena.py --port 8820`。dev 集 4 任务 × 8 题同题对比 + 自定义输入。
+- **实机游玩页**（端口 8821，dashboard/play_server.py + play.html）：选模型 × 游戏 × 种子，
+  环境循环 = 状态文本 → serve_decisions 推理 → 贪心动作 → env.step。四游戏全通
+  （maze/snake 用 unified_grid_envs，basic/PP 用 unified_doom_env + RGB24 帧抓取 base64）。
+  坑：Choice 服务端要求候选 ≥2，迷宫剩 1 个未试方向时直接执行不问模型；venv 新装 pillow（走代理 uv）。
 - 游戏成功率回放：ViZDoom 已通，sonic 评测管线待搭建（evaluate_game_policy.py 是旧 toy 线不适用）。
 
 ## 4800 步扩展实验结果（2026-10-07 晨）
